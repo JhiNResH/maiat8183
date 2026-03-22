@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ITrustOracle} from "../interfaces/ITrustOracle.sol";
 
 /**
  * @title TrustBasedEvaluator
@@ -16,28 +18,13 @@ import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
  *   2. AgenticCommerce calls evaluator.evaluate(jobId) (or off-chain keeper)
  *   3. Evaluator checks provider trust score from oracle
  *   4. Returns complete() or reject() to AgenticCommerce
- *   5. [v1.1] Calls registry.recordOutcome() to update on-chain performance stats
+ *   5. Calls registry.recordOutcome() to update on-chain performance stats
  *
  * Trust oracle interface:
  *   getUserData(address) → { reputationScore, initialized, ... }
  *
- * v1.1 additions:
- *   - Feedback loop: after each evaluation, recordOutcome() is called on the
- *     EvaluatorRegistry so this evaluator's stats are tracked on-chain.
- *     This allows the registry to rank evaluators by real-world performance,
- *     making the discovery mechanism self-optimizing over time.
+ * @custom:security-contact security@maiat.io
  */
-
-/// @notice Minimal trust oracle interface
-interface ITrustOracle {
-    struct UserReputation {
-        uint256 reputationScore;
-        uint256 totalReviews;
-        bool initialized;
-        uint256 lastUpdated;
-    }
-    function getUserData(address user) external view returns (UserReputation memory);
-}
 
 /// @notice Minimal AgenticCommerce interface for evaluation
 interface IAgenticCommerce {
@@ -65,7 +52,14 @@ interface IEvaluatorRegistry {
     function recordOutcome(address evaluator, bool approved) external;
 }
 
-contract TrustBasedEvaluator is OwnableUpgradeable {
+contract TrustBasedEvaluator is OwnableUpgradeable, ReentrancyGuard {
+    /*//////////////////////////////////////////////////////////////
+                            CONSTANTS
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice Maximum valid trust score from oracle
+    uint256 public constant MAX_TRUST_SCORE = 100;
+
     /*//////////////////////////////////////////////////////////////
                             STORAGE
     //////////////////////////////////////////////////////////////*/
@@ -74,7 +68,6 @@ contract TrustBasedEvaluator is OwnableUpgradeable {
     IAgenticCommerce public agenticCommerce;
 
     /// @notice Optional EvaluatorRegistry for on-chain performance feedback loop.
-    ///         Can be address(0) if the registry is not deployed or not opted in.
     IEvaluatorRegistry public registry;
 
     /// @notice Minimum trust score (0-100) to auto-approve
@@ -83,10 +76,13 @@ contract TrustBasedEvaluator is OwnableUpgradeable {
     /// @notice Tracks evaluated jobs to prevent double-evaluation
     mapping(uint256 => bool) public evaluated;
 
-    /// @notice Stats (local to this evaluator — mirrors what registry tracks globally)
+    /// @notice Stats
     uint256 public totalEvaluated;
     uint256 public totalApproved;
     uint256 public totalRejected;
+
+    /// @dev Reserved storage gap for future upgrades
+    uint256[40] private __gap;
 
     /*//////////////////////////////////////////////////////////////
                             EVENTS
@@ -99,7 +95,10 @@ contract TrustBasedEvaluator is OwnableUpgradeable {
         uint256 trustScore,
         bytes32 reason
     );
-    event RegistryUpdated(address indexed registry);
+    event RegistryUpdated(address indexed oldRegistry, address indexed newRegistry);
+    event OracleUpdated(address indexed oldOracle, address indexed newOracle);
+    event AgenticCommerceUpdated(address indexed oldAC, address indexed newAC);
+    event MinTrustScoreUpdated(uint256 oldScore, uint256 newScore);
     event OutcomeReportFailed(address indexed registry, bytes reason);
 
     /*//////////////////////////////////////////////////////////////
@@ -109,6 +108,16 @@ contract TrustBasedEvaluator is OwnableUpgradeable {
     error TrustBasedEvaluator__AlreadyEvaluated(uint256 jobId);
     error TrustBasedEvaluator__NotSubmitted(uint256 jobId);
     error TrustBasedEvaluator__NotAssignedEvaluator(uint256 jobId);
+    error TrustBasedEvaluator__ZeroAddress();
+
+    /*//////////////////////////////////////////////////////////////
+                            CONSTRUCTOR
+    //////////////////////////////////////////////////////////////*/
+
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
 
     /*//////////////////////////////////////////////////////////////
                             INITIALIZER
@@ -120,11 +129,13 @@ contract TrustBasedEvaluator is OwnableUpgradeable {
         uint256 minTrustScore_,
         address owner_
     ) external initializer {
+        if (oracle_ == address(0)) revert TrustBasedEvaluator__ZeroAddress();
+        if (agenticCommerce_ == address(0)) revert TrustBasedEvaluator__ZeroAddress();
+
         __Ownable_init(owner_);
         oracle = ITrustOracle(oracle_);
         agenticCommerce = IAgenticCommerce(agenticCommerce_);
         minTrustScore = minTrustScore_;
-        // registry defaults to address(0) — set later via setRegistry()
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -140,11 +151,10 @@ contract TrustBasedEvaluator is OwnableUpgradeable {
      *   2. Verify this contract is the assigned evaluator
      *   3. Check provider trust score
      *   4. Auto-approve if score >= minTrustScore, reject otherwise
-     *   5. Call complete() or reject() on AgenticCommerce
-     *   6. [v1.1] Report outcome to EvaluatorRegistry (feedback loop)
-     *             — uses a try/catch so registry failures never block evaluation
+     *   5. Record outcome to EvaluatorRegistry (feedback loop)
+     *   6. Call complete() or reject() on AgenticCommerce
      */
-    function evaluate(uint256 jobId) external {
+    function evaluate(uint256 jobId) external nonReentrant {
         if (evaluated[jobId]) revert TrustBasedEvaluator__AlreadyEvaluated(jobId);
 
         IAgenticCommerce.Job memory job = agenticCommerce.getJob(jobId);
@@ -156,12 +166,15 @@ contract TrustBasedEvaluator is OwnableUpgradeable {
             revert TrustBasedEvaluator__NotAssignedEvaluator(jobId);
         }
 
+        // CEI: all state changes before external calls
         evaluated[jobId] = true;
         totalEvaluated++;
 
         // Check provider trust
         ITrustOracle.UserReputation memory rep = oracle.getUserData(job.provider);
         uint256 score = rep.initialized ? rep.reputationScore : 0;
+        // Sanity bound on oracle score
+        if (score > MAX_TRUST_SCORE) score = MAX_TRUST_SCORE;
 
         bool approved = score >= minTrustScore;
         bytes32 reason = approved
@@ -170,79 +183,65 @@ contract TrustBasedEvaluator is OwnableUpgradeable {
 
         if (approved) {
             totalApproved++;
-            agenticCommerce.complete(jobId, reason, "");
         } else {
             totalRejected++;
-            agenticCommerce.reject(jobId, reason, "");
         }
 
+        // Emit event BEFORE external calls (CEI)
         emit JobEvaluated(jobId, job.provider, approved, score, reason);
 
-        // [v1.1] Feedback loop — report outcome to the registry.
-        // This updates our on-chain performance stats so the registry can rank
-        // evaluators by real-world success rates.
-        // We use try/catch so that a registry failure (e.g., not authorized yet,
-        // registry upgraded, etc.) never causes the evaluation itself to revert.
+        // Report outcome to registry BEFORE AC call (CEI)
         _reportOutcomeToRegistry(approved);
+
+        // External calls last
+        if (approved) {
+            agenticCommerce.complete(jobId, reason, "");
+        } else {
+            agenticCommerce.reject(jobId, reason, "");
+        }
     }
 
     /*//////////////////////////////////////////////////////////////
                         ADMIN
     //////////////////////////////////////////////////////////////*/
 
-    /**
-     * @notice Set the EvaluatorRegistry address for the feedback loop.
-     * @dev Set to address(0) to disable registry reporting.
-     *      This contract must also be authorized in the registry via
-     *      registry.setAuthorized(address(this), true) for recordOutcome to succeed.
-     * @param registry_ Address of the EvaluatorRegistry (or address(0) to disable)
-     */
     function setRegistry(address registry_) external onlyOwner {
+        address old = address(registry);
         registry = IEvaluatorRegistry(registry_);
-        emit RegistryUpdated(registry_);
+        emit RegistryUpdated(old, registry_);
     }
 
-    /**
-     * @notice Update minimum trust score threshold.
-     * @param score New minimum score (0-100)
-     */
     function setMinTrustScore(uint256 score) external onlyOwner {
+        uint256 old = minTrustScore;
         minTrustScore = score;
+        emit MinTrustScoreUpdated(old, score);
     }
 
-    /**
-     * @notice Update trust oracle address.
-     * @param oracle_ New oracle address
-     */
     function setOracle(address oracle_) external onlyOwner {
+        if (oracle_ == address(0)) revert TrustBasedEvaluator__ZeroAddress();
+        address old = address(oracle);
         oracle = ITrustOracle(oracle_);
+        emit OracleUpdated(old, oracle_);
     }
 
-    /**
-     * @notice Update AgenticCommerce address.
-     * @param agenticCommerce_ New AgenticCommerce address
-     */
     function setAgenticCommerce(address agenticCommerce_) external onlyOwner {
+        if (agenticCommerce_ == address(0)) revert TrustBasedEvaluator__ZeroAddress();
+        address old = address(agenticCommerce);
         agenticCommerce = IAgenticCommerce(agenticCommerce_);
+        emit AgenticCommerceUpdated(old, agenticCommerce_);
     }
 
     /*//////////////////////////////////////////////////////////////
                         INTERNAL
     //////////////////////////////////////////////////////////////*/
 
-    /**
-     * @dev Attempts to call registry.recordOutcome(). Silently catches all failures.
-     *      Emits OutcomeReportFailed with the low-level error bytes if it fails,
-     *      so operators can diagnose authorization or registry issues off-chain.
-     */
     function _reportOutcomeToRegistry(bool approved) internal {
         IEvaluatorRegistry reg = registry;
         if (address(reg) == address(0)) return;
 
         try reg.recordOutcome(address(this), approved) {
-            // success — stats updated in registry
+            // success
         } catch (bytes memory reason) {
-            // never revert the parent transaction; just surface the failure as an event
             emit OutcomeReportFailed(address(reg), reason);
         }
     }

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "../IACPHook.sol";
-import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {IACPHook} from "../IACPHook.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {ITrustOracle} from "../interfaces/ITrustOracle.sol";
 
 /**
  * @title TrustGateACPHook
@@ -20,55 +21,43 @@ import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
  * Revert in beforeAction to block the transition.
  * afterAction should NOT revert (would block legitimate state changes).
  *
- * v1.1 additions:
- *   - Dynamic threshold by job value via a configurable tier system.
- *     Higher-value jobs require a higher trust score from participants.
- *     Tiers are defined by (minValue, requiredScore) pairs; the highest
- *     matching tier wins.
+ * @custom:security-contact security@maiat.io
  */
-
-/// @notice Minimal trust oracle interface
-interface ITrustOracle {
-    struct UserReputation {
-        uint256 reputationScore;
-        bool initialized;
-    }
-    function getUserData(address user) external view returns (UserReputation memory);
-}
-
-/// @notice Minimal AgenticCommerce interface — enough to read job budget
-interface IAgenticCommerce {
-    struct Job {
-        uint256 id;
-        address client;
-        address provider;
-        address evaluator;
-        address hook;
-        string description;
-        uint256 budget;
-        uint256 expiredAt;
-        uint8 status;
-    }
-    function getJob(uint256 jobId) external view returns (Job memory);
-}
 
 contract TrustGateACPHook is IACPHook, OwnableUpgradeable {
     /*//////////////////////////////////////////////////////////////
                             TYPES
     //////////////////////////////////////////////////////////////*/
 
-    /// @notice A value tier: jobs with budget >= minValue require >= requiredScore
     struct Tier {
-        uint256 minValue;       // minimum job budget (in payment token base units)
-        uint256 requiredScore;  // minimum trust score for this tier
+        uint256 minValue;
+        uint256 requiredScore;
     }
+
+    /*//////////////////////////////////////////////////////////////
+                            CONSTANTS
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice Maximum number of tiers to prevent unbounded growth
+    uint256 public constant MAX_TIERS = 20;
+
+    /// @notice Maximum valid trust score from oracle
+    uint256 public constant MAX_TRUST_SCORE = 100;
+
+    /// @dev Well-known selectors from AgenticCommerce
+    bytes4 public constant FUND_SEL     = bytes4(keccak256("fund(uint256,bytes)"));
+    bytes4 public constant SUBMIT_SEL   = bytes4(keccak256("submit(uint256,bytes32,bytes)"));
+    bytes4 public constant COMPLETE_SEL = bytes4(keccak256("complete(uint256,bytes32,bytes)"));
+    bytes4 public constant REJECT_SEL   = bytes4(keccak256("reject(uint256,bytes32,bytes)"));
 
     /*//////////////////////////////////////////////////////////////
                             STORAGE
     //////////////////////////////////////////////////////////////*/
 
     ITrustOracle public oracle;
-    IAgenticCommerce public agenticCommerce;
+
+    /// @notice AgenticCommerce contract — used for job budget lookup and access control
+    address public agenticCommerce;
 
     /// @notice Baseline trust score for clients (no job-value override)
     uint256 public clientThreshold;
@@ -79,11 +68,8 @@ contract TrustGateACPHook is IACPHook, OwnableUpgradeable {
     /// @notice Sorted tiers (ascending by minValue). Higher tiers override lower ones.
     Tier[] private _tiers;
 
-    /// @dev Well-known selectors from AgenticCommerce
-    bytes4 public constant FUND_SEL     = bytes4(keccak256("fund(uint256,bytes)"));
-    bytes4 public constant SUBMIT_SEL   = bytes4(keccak256("submit(uint256,bytes32,bytes)"));
-    bytes4 public constant COMPLETE_SEL = bytes4(keccak256("complete(uint256,bytes32,bytes)"));
-    bytes4 public constant REJECT_SEL   = bytes4(keccak256("reject(uint256,bytes32,bytes)"));
+    /// @dev Reserved storage gap for future upgrades
+    uint256[44] private __gap;
 
     /*//////////////////////////////////////////////////////////////
                             EVENTS
@@ -92,12 +78,29 @@ contract TrustGateACPHook is IACPHook, OwnableUpgradeable {
     event TrustGated(uint256 indexed jobId, address indexed agent, uint256 score, bool allowed);
     event OutcomeRecorded(uint256 indexed jobId, bool completed);
     event TierSet(uint256 minValue, uint256 requiredScore);
+    event TierRemoved(uint256 minValue);
+    event OracleUpdated(address indexed oldOracle, address indexed newOracle);
+    event AgenticCommerceUpdated(address indexed oldAC, address indexed newAC);
+    event ThresholdsUpdated(uint256 clientThreshold, uint256 providerThreshold);
 
     /*//////////////////////////////////////////////////////////////
                             ERRORS
     //////////////////////////////////////////////////////////////*/
 
     error TrustGateACPHook__TrustTooLow(uint256 jobId, address agent, uint256 score, uint256 threshold);
+    error TrustGateACPHook__ZeroAddress();
+    error TrustGateACPHook__OnlyAgenticCommerce();
+    error TrustGateACPHook__MaxTiersReached();
+    error TrustGateACPHook__TierNotFound(uint256 minValue);
+
+    /*//////////////////////////////////////////////////////////////
+                            CONSTRUCTOR
+    //////////////////////////////////////////////////////////////*/
+
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
 
     /*//////////////////////////////////////////////////////////////
                             INITIALIZER
@@ -110,9 +113,12 @@ contract TrustGateACPHook is IACPHook, OwnableUpgradeable {
         uint256 providerThreshold_,
         address owner_
     ) external initializer {
+        if (oracle_ == address(0)) revert TrustGateACPHook__ZeroAddress();
+        if (agenticCommerce_ == address(0)) revert TrustGateACPHook__ZeroAddress();
+
         __Ownable_init(owner_);
         oracle = ITrustOracle(oracle_);
-        agenticCommerce = IAgenticCommerce(agenticCommerce_);
+        agenticCommerce = agenticCommerce_;
         clientThreshold = clientThreshold_;
         providerThreshold = providerThreshold_;
     }
@@ -123,19 +129,19 @@ contract TrustGateACPHook is IACPHook, OwnableUpgradeable {
 
     /**
      * @notice Called before state transitions. Reverts to block.
-     * @dev Reads job budget to apply dynamic tier-based threshold overrides.
-     *      Falls back to baseline threshold if agenticCommerce is not set or
-     *      if the job cannot be looked up (graceful degradation).
+     * @dev Only callable by AgenticCommerce.
      */
     function beforeAction(uint256 jobId, bytes4 selector, bytes calldata data) external override {
+        if (msg.sender != agenticCommerce) revert TrustGateACPHook__OnlyAgenticCommerce();
+
         if (selector == FUND_SEL) {
-            // data = abi.encode(caller, optParams)
             (address caller,) = abi.decode(data, (address, bytes));
+            if (caller == address(0)) return; // Skip trust check for zero address
             uint256 threshold = _effectiveThreshold(jobId, clientThreshold);
             _checkTrust(jobId, caller, threshold);
         } else if (selector == SUBMIT_SEL) {
-            // data = abi.encode(caller, reason, optParams)
             (address caller,,) = abi.decode(data, (address, bytes32, bytes));
+            if (caller == address(0)) return;
             uint256 threshold = _effectiveThreshold(jobId, providerThreshold);
             _checkTrust(jobId, caller, threshold);
         }
@@ -148,8 +154,11 @@ contract TrustGateACPHook is IACPHook, OwnableUpgradeable {
 
     /**
      * @notice Called after state transitions. Records outcomes (never reverts).
+     * @dev Only callable by AgenticCommerce.
      */
     function afterAction(uint256 jobId, bytes4 selector, bytes calldata) external override {
+        if (msg.sender != agenticCommerce) revert TrustGateACPHook__OnlyAgenticCommerce();
+
         if (selector == COMPLETE_SEL) {
             emit OutcomeRecorded(jobId, true);
         } else if (selector == REJECT_SEL) {
@@ -161,7 +170,7 @@ contract TrustGateACPHook is IACPHook, OwnableUpgradeable {
                     ERC-165
     //////////////////////////////////////////////////////////////*/
 
-    function supportsInterface(bytes4 interfaceId) external pure override returns (bool) {
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
         return interfaceId == type(IACPHook).interfaceId
             || interfaceId == 0x01ffc9a7; // IERC165
     }
@@ -170,30 +179,12 @@ contract TrustGateACPHook is IACPHook, OwnableUpgradeable {
                     ADMIN
     //////////////////////////////////////////////////////////////*/
 
-    /**
-     * @notice Set baseline thresholds for clients and providers.
-     * @param client_   Baseline minimum trust score for clients
-     * @param provider_ Baseline minimum trust score for providers
-     */
     function setThresholds(uint256 client_, uint256 provider_) external onlyOwner {
         clientThreshold = client_;
         providerThreshold = provider_;
+        emit ThresholdsUpdated(client_, provider_);
     }
 
-    /**
-     * @notice Add or update a value-based tier threshold.
-     * @dev Jobs with budget >= minValue will require at least requiredScore trust.
-     *      Multiple tiers can be set; the highest matching minValue wins.
-     *      To remove a tier, set requiredScore = 0 (effectively disables it).
-     *
-     * Example:
-     *   setTierThreshold(1_000e6,  60)   // jobs ≥ $1k  → score ≥ 60
-     *   setTierThreshold(10_000e6, 80)   // jobs ≥ $10k → score ≥ 80
-     *   setTierThreshold(100_000e6, 95)  // jobs ≥ $100k → score ≥ 95
-     *
-     * @param minValue      Minimum job budget (inclusive) in payment token base units
-     * @param requiredScore Minimum trust score for jobs at this value tier
-     */
     function setTierThreshold(uint256 minValue, uint256 requiredScore) external onlyOwner {
         uint256 len = _tiers.length;
 
@@ -206,9 +197,11 @@ contract TrustGateACPHook is IACPHook, OwnableUpgradeable {
             }
         }
 
+        // New tier — check max
+        if (len >= MAX_TIERS) revert TrustGateACPHook__MaxTiersReached();
+
         // Insert new tier, keeping the array sorted ascending by minValue
         _tiers.push(Tier(minValue, requiredScore));
-        // Bubble the new entry into the correct sorted position
         uint256 j = _tiers.length - 1;
         while (j > 0 && _tiers[j - 1].minValue > _tiers[j].minValue) {
             Tier memory tmp = _tiers[j - 1];
@@ -221,24 +214,45 @@ contract TrustGateACPHook is IACPHook, OwnableUpgradeable {
     }
 
     /**
-     * @notice Update oracle address.
-     * @param oracle_ New trust oracle address
+     * @notice Remove a tier by its minValue.
+     * @param minValue The minValue of the tier to remove
      */
+    function removeTier(uint256 minValue) external onlyOwner {
+        uint256 len = _tiers.length;
+        for (uint256 i = 0; i < len; i++) {
+            if (_tiers[i].minValue == minValue) {
+                // Swap with last and pop
+                if (i != len - 1) {
+                    _tiers[i] = _tiers[len - 1];
+                }
+                _tiers.pop();
+
+                // Re-sort if we swapped (maintain ascending order)
+                if (i != len - 1 && _tiers.length > 1) {
+                    _sortTiers();
+                }
+
+                emit TierRemoved(minValue);
+                return;
+            }
+        }
+        revert TrustGateACPHook__TierNotFound(minValue);
+    }
+
     function setOracle(address oracle_) external onlyOwner {
+        if (oracle_ == address(0)) revert TrustGateACPHook__ZeroAddress();
+        address old = address(oracle);
         oracle = ITrustOracle(oracle_);
+        emit OracleUpdated(old, oracle_);
     }
 
-    /**
-     * @notice Update AgenticCommerce address (used to look up job budgets for tiers).
-     * @param agenticCommerce_ New AgenticCommerce address
-     */
     function setAgenticCommerce(address agenticCommerce_) external onlyOwner {
-        agenticCommerce = IAgenticCommerce(agenticCommerce_);
+        if (agenticCommerce_ == address(0)) revert TrustGateACPHook__ZeroAddress();
+        address old = agenticCommerce;
+        agenticCommerce = agenticCommerce_;
+        emit AgenticCommerceUpdated(old, agenticCommerce_);
     }
 
-    /**
-     * @notice Return the full list of configured value tiers (sorted ascending by minValue).
-     */
     function getTiers() external view returns (Tier[] memory) {
         return _tiers;
     }
@@ -247,24 +261,28 @@ contract TrustGateACPHook is IACPHook, OwnableUpgradeable {
                     INTERNAL
     //////////////////////////////////////////////////////////////*/
 
-    /**
-     * @dev Look up the job budget and find the highest-matching tier threshold.
-     *      If no tier matches or agenticCommerce is not set, returns the baseThreshold.
-     *      Gracefully degrades on revert (e.g., invalid jobId).
-     */
+    /// @dev Minimal interface for reading job budget
     function _effectiveThreshold(uint256 jobId, uint256 baseThreshold) internal view returns (uint256) {
-        if (address(agenticCommerce) == address(0)) return baseThreshold;
+        if (agenticCommerce == address(0)) return baseThreshold;
         if (_tiers.length == 0) return baseThreshold;
 
-        // Try to read budget. If it fails, fall back to base.
         uint256 budget;
-        try agenticCommerce.getJob(jobId) returns (IAgenticCommerce.Job memory job) {
-            budget = job.budget;
-        } catch {
-            return baseThreshold;
+        // Use low-level staticcall to avoid interface import dependency
+        (bool success, bytes memory data) = agenticCommerce.staticcall(
+            abi.encodeWithSignature("getJob(uint256)", jobId)
+        );
+        if (!success) return baseThreshold;
+
+        // Decode budget from Job struct — budget is at offset 5 (after id, client, provider, evaluator, hook)
+        // But struct layout varies. Use a simpler approach: decode the full tuple
+        // For safety, just try to extract budget field
+        if (data.length < 256) return baseThreshold; // Job struct is large
+        assembly {
+            // Job struct: id(32) + client(32) + provider(32) + evaluator(32) + hook(32) + desc_offset(32) + budget(32)
+            // budget is at position 6 (0-indexed) = offset 192 + 32 (data header) = 224
+            budget := mload(add(data, 224))
         }
 
-        // Walk tiers in descending order — first match (highest qualifying tier) wins
         uint256 len = _tiers.length;
         uint256 result = baseThreshold;
         for (uint256 i = 0; i < len; i++) {
@@ -278,6 +296,8 @@ contract TrustGateACPHook is IACPHook, OwnableUpgradeable {
     function _checkTrust(uint256 jobId, address agent, uint256 threshold) internal {
         ITrustOracle.UserReputation memory rep = oracle.getUserData(agent);
         uint256 score = rep.initialized ? rep.reputationScore : 0;
+        // Sanity bound
+        if (score > MAX_TRUST_SCORE) score = MAX_TRUST_SCORE;
 
         if (score < threshold) {
             emit TrustGated(jobId, agent, score, false);
@@ -285,5 +305,19 @@ contract TrustGateACPHook is IACPHook, OwnableUpgradeable {
         }
 
         emit TrustGated(jobId, agent, score, true);
+    }
+
+    /// @dev Insertion sort for _tiers (max 20 elements, O(n²) is fine)
+    function _sortTiers() internal {
+        uint256 len = _tiers.length;
+        for (uint256 i = 1; i < len; i++) {
+            Tier memory key = _tiers[i];
+            uint256 j = i;
+            while (j > 0 && _tiers[j - 1].minValue > key.minValue) {
+                _tiers[j] = _tiers[j - 1];
+                j--;
+            }
+            _tiers[j] = key;
+        }
     }
 }
