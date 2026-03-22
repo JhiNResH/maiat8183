@@ -22,7 +22,7 @@ import {ITokenSafetyOracle} from "../interfaces/ITokenSafetyOracle.sol";
  * Features:
  *   - Owner can whitelist tokens to bypass oracle checks
  *   - Owner can set risk tolerance (bitmask of which verdicts to block)
- *   - Upgradeable via UUPS pattern (OwnableUpgradeable + storage gap)
+ *   - NOT upgradeable — deploy a new instance and swap via Router if logic changes
  *
  * @custom:security-contact security@maiat.io
  */

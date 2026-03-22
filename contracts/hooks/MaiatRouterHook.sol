@@ -22,7 +22,7 @@ import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Own
  *   - No duplicate plugin addresses
  *   - Admin can add, remove, enable, disable plugins
  *   - Plugins sorted by priority (ascending — lower number = earlier execution)
- *   - Upgradeable via UUPS pattern (OwnableUpgradeable + storage gap)
+ *   - NOT upgradeable — deploy a new instance and swap via addPlugin/removePlugin
  *
  * @custom:security-contact security@maiat.io
  */
