@@ -5,12 +5,14 @@ import "../BaseACPHook.sol";
 
 /**
  * @title AttestationHook
+ * @author Maiat Protocol (https://maiat.io)
+ * @custom:security-contact security@maiat.io
  * @notice ERC-8183 hook that writes EAS attestations on job completion and rejection.
  *         Creates an immutable, on-chain receipt for every ACP transaction — enabling
  *         trust scores, reputation systems (e.g. ERC-8004), and agent credit histories.
  *
  * @dev Extends BaseACPHook. Only afterAction hooks are used (non-blocking).
- *      Attestations are written to the Ethereum Attestation Service (EAS) on Base.
+ *      Attestations are written to the Ethereum Attestation Service (EAS).
  *
  * Flow:
  *   1. Job completes or is rejected via AgenticCommerceHooked
@@ -19,15 +21,16 @@ import "../BaseACPHook.sol";
  *   4. Hook writes EAS attestation with structured receipt data
  *   5. Attestation is permanently on-chain, queryable by anyone
  *
- * Schema (registered on Base EAS):
+ * Schema (registered on EAS):
  *   "uint256 jobId, address client, address provider, address evaluator,
- *    uint256 budget, bytes32 deliverable, bytes32 reason, bool completed"
+ *    uint256 budget, bytes32 reason, bool completed"
  *
  * Design decisions:
  *   - Attestation is written to provider as recipient (they accumulate reputation)
  *   - Non-revocable (job outcomes are facts, not opinions)
  *   - afterAction only — never blocks job lifecycle (no beforeAction logic)
  *   - Uses try/catch so EAS failures never revert the job transaction
+ *   - Idempotent: each jobId can only be attested once
  *   - Owner can update schema UID if re-registered
  */
 
@@ -69,20 +72,30 @@ interface IAgenticCommerceReader {
 
 contract AttestationHook is BaseACPHook {
     /*//////////////////////////////////////////////////////////////
+                            CONSTANTS
+    //////////////////////////////////////////////////////////////*/
+
+    /// @dev Sentinel value to mark in-progress attestation (CEI pattern)
+    bytes32 private constant _PENDING_SENTINEL = bytes32(type(uint256).max);
+
+    /*//////////////////////////////////////////////////////////////
                             STORAGE
     //////////////////////////////////////////////////////////////*/
 
-    /// @notice EAS contract on Base (predeploy at 0x4200...0021)
+    /// @notice EAS contract (Base predeploy at 0x4200...0021)
     IEAS public eas;
 
     /// @notice Schema UID for the ACP job receipt schema
     bytes32 public schemaUID;
 
     /// @notice AgenticCommerce contract to read job details
-    IAgenticCommerceReader public agenticCommerce;
+    IAgenticCommerceReader public immutable agenticCommerce;
 
     /// @notice Owner for admin functions
     address public owner;
+
+    /// @notice Pending owner for two-step transfer
+    address public pendingOwner;
 
     /// @notice Track attestation UIDs per job (for reference)
     mapping(uint256 => bytes32) public jobAttestations;
@@ -104,12 +117,18 @@ contract AttestationHook is BaseACPHook {
     event AttestationFailed(uint256 indexed jobId, bytes reason);
     event SchemaUpdated(bytes32 indexed newSchemaUID);
     event EASUpdated(address indexed newEAS);
+    event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
     /*//////////////////////////////////////////////////////////////
                             ERRORS
     //////////////////////////////////////////////////////////////*/
 
-    error OnlyOwner();
+    error AttestationHook__OnlyOwner();
+    error AttestationHook__OnlyPendingOwner();
+    error AttestationHook__ZeroAddress();
+    error AttestationHook__ZeroSchemaUID();
+    error AttestationHook__NotContract();
 
     /*//////////////////////////////////////////////////////////////
                             CONSTRUCTOR
@@ -125,10 +144,15 @@ contract AttestationHook is BaseACPHook {
         address eas_,
         bytes32 schemaUID_
     ) BaseACPHook(acpContract_) {
+        if (eas_ == address(0)) revert AttestationHook__ZeroAddress();
+        if (schemaUID_ == bytes32(0)) revert AttestationHook__ZeroSchemaUID();
+
         eas = IEAS(eas_);
         schemaUID = schemaUID_;
         agenticCommerce = IAgenticCommerceReader(acpContract_);
         owner = msg.sender;
+
+        emit OwnershipTransferred(address(0), msg.sender);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -172,9 +196,11 @@ contract AttestationHook is BaseACPHook {
     /**
      * @dev Reads job data from ACP contract and writes an EAS attestation.
      *      Uses try/catch — EAS failures NEVER revert the parent transaction.
+     *      Idempotent — each jobId can only be attested once.
+     *      Follows CEI pattern with a pending sentinel.
      *
      * Schema encoding:
-     *   abi.encode(jobId, client, provider, evaluator, budget, deliverable, reason, completed)
+     *   abi.encode(jobId, client, provider, evaluator, budget, reason, completed)
      *
      * Recipient = provider (they accumulate reputation from completed/rejected jobs)
      */
@@ -183,6 +209,9 @@ contract AttestationHook is BaseACPHook {
         bytes32 reason,
         bool completed
     ) internal {
+        // [ATH-02] Idempotency guard — each job attested once only
+        if (jobAttestations[jobId] != bytes32(0)) return;
+
         // Read job data from ACP contract
         IAgenticCommerceReader.Job memory job;
         try agenticCommerce.getJob(jobId) returns (IAgenticCommerceReader.Job memory j) {
@@ -192,19 +221,21 @@ contract AttestationHook is BaseACPHook {
             return;
         }
 
-        // Encode attestation data matching our schema
-        // Note: deliverable is not stored in the Job struct, so we use reason as
-        // the primary content hash. The deliverable was emitted in JobSubmitted event
-        // and can be referenced off-chain via the jobId.
+        // Encode attestation data matching registered schema:
+        // "uint256 jobId, address client, address provider, address evaluator,
+        //  uint256 budget, bytes32 reason, bool completed"
         bytes memory attestationData = abi.encode(
             jobId,
             job.client,
             job.provider,
             job.evaluator,
             job.budget,
-            reason,       // evaluator's reason / quality hash
+            reason,
             completed
         );
+
+        // [ATH-05] CEI: Set sentinel BEFORE external call
+        jobAttestations[jobId] = _PENDING_SENTINEL;
 
         // Write to EAS
         try eas.attest(
@@ -224,6 +255,8 @@ contract AttestationHook is BaseACPHook {
             totalAttestations++;
             emit AttestationCreated(jobId, uid, job.provider, completed);
         } catch (bytes memory err) {
+            // Reset sentinel on failure
+            jobAttestations[jobId] = bytes32(0);
             emit AttestationFailed(jobId, err);
         }
     }
@@ -233,34 +266,48 @@ contract AttestationHook is BaseACPHook {
     //////////////////////////////////////////////////////////////*/
 
     modifier onlyOwner_() {
-        if (msg.sender != owner) revert OnlyOwner();
+        if (msg.sender != owner) revert AttestationHook__OnlyOwner();
         _;
     }
 
     /**
      * @notice Update the EAS schema UID (e.g. if schema is re-registered)
-     * @param schemaUID_ New schema UID
+     * @param schemaUID_ New schema UID (must be non-zero)
      */
     function setSchemaUID(bytes32 schemaUID_) external onlyOwner_ {
+        if (schemaUID_ == bytes32(0)) revert AttestationHook__ZeroSchemaUID();
         schemaUID = schemaUID_;
         emit SchemaUpdated(schemaUID_);
     }
 
     /**
      * @notice Update the EAS contract address
-     * @param eas_ New EAS address
+     * @param eas_ New EAS address (must be non-zero contract)
      */
     function setEAS(address eas_) external onlyOwner_ {
+        if (eas_ == address(0)) revert AttestationHook__ZeroAddress();
         eas = IEAS(eas_);
         emit EASUpdated(eas_);
     }
 
     /**
-     * @notice Transfer ownership
-     * @param newOwner New owner address
+     * @notice Start two-step ownership transfer
+     * @param newOwner Proposed new owner (must be non-zero)
      */
     function transferOwnership(address newOwner) external onlyOwner_ {
-        owner = newOwner;
+        if (newOwner == address(0)) revert AttestationHook__ZeroAddress();
+        pendingOwner = newOwner;
+        emit OwnershipTransferStarted(owner, newOwner);
+    }
+
+    /**
+     * @notice Accept ownership transfer (must be called by pending owner)
+     */
+    function acceptOwnership() external {
+        if (msg.sender != pendingOwner) revert AttestationHook__OnlyPendingOwner();
+        emit OwnershipTransferred(owner, msg.sender);
+        owner = msg.sender;
+        pendingOwner = address(0);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -273,7 +320,9 @@ contract AttestationHook is BaseACPHook {
      * @return uid The attestation UID (bytes32(0) if not attested)
      */
     function getAttestation(uint256 jobId) external view returns (bytes32) {
-        return jobAttestations[jobId];
+        bytes32 uid = jobAttestations[jobId];
+        // Don't expose the sentinel value
+        return uid == _PENDING_SENTINEL ? bytes32(0) : uid;
     }
 
     /**
