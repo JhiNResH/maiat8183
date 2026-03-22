@@ -261,7 +261,7 @@ contract TrustGateACPHook is IACPHook, OwnableUpgradeable {
                     INTERNAL
     //////////////////////////////////////////////////////////////*/
 
-    /// @dev Minimal interface for reading job budget
+    /// @dev Read job budget from AgenticCommerce via staticcall + abi.decode
     function _effectiveThreshold(uint256 jobId, uint256 baseThreshold) internal view returns (uint256) {
         if (agenticCommerce == address(0)) return baseThreshold;
         if (_tiers.length == 0) return baseThreshold;
@@ -271,17 +271,15 @@ contract TrustGateACPHook is IACPHook, OwnableUpgradeable {
         (bool success, bytes memory data) = agenticCommerce.staticcall(
             abi.encodeWithSignature("getJob(uint256)", jobId)
         );
-        if (!success) return baseThreshold;
+        if (!success || data.length < 32) return baseThreshold;
 
-        // Decode budget from Job struct — budget is at offset 5 (after id, client, provider, evaluator, hook)
-        // But struct layout varies. Use a simpler approach: decode the full tuple
-        // For safety, just try to extract budget field
-        if (data.length < 256) return baseThreshold; // Job struct is large
-        assembly {
-            // Job struct: id(32) + client(32) + provider(32) + evaluator(32) + hook(32) + desc_offset(32) + budget(32)
-            // budget is at position 6 (0-indexed) = offset 192 + 32 (data header) = 224
-            budget := mload(add(data, 224))
-        }
+        // Use abi.decode for safe extraction — handles dynamic types (string) correctly
+        // Job struct: (uint256 id, address client, address provider, address evaluator,
+        //              address hook, string description, uint256 budget, uint256 expiredAt, uint8 status)
+        (,,,,,, budget,,) = abi.decode(
+            data,
+            (uint256, address, address, address, address, string, uint256, uint256, uint8)
+        );
 
         uint256 len = _tiers.length;
         uint256 result = baseThreshold;
