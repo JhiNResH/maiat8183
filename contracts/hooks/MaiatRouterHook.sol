@@ -6,23 +6,41 @@ import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Own
 
 /**
  * @title MaiatRouterHook
- * @notice Composite IACPHook that chains multiple plugin hooks in priority order.
- *         Enables flexible composition of hook behaviors for ERC-8183 jobs.
+ * @notice Composite hook router that chains up to 10 plugin hooks in
+ *         priority order, enabling flexible composition of hook behaviors
+ *         for ERC-8183 jobs without deploying a new hook address.
  *
- * @dev This is a REFERENCE IMPLEMENTATION for the ERC-8183 hook system.
+ * USE CASE
+ * --------
+ * A single ACP job often needs multiple orthogonal safety checks — e.g.
+ * token safety screening before funding, trust-score gating before
+ * submission, and attestation writing after completion. Wiring each job
+ * to a different hook address is cumbersome. MaiatRouterHook acts as a
+ * single hook address that fan-outs to an ordered list of plugin hooks,
+ * letting operators compose behavior by adding/removing/prioritising
+ * plugins at runtime without changing the job's hook reference.
  *
- * Hook points:
- *   - beforeAction → Iterates enabled plugins in priority order (ascending).
- *                    If any plugin reverts, entire call reverts.
- *   - afterAction  → Iterates enabled plugins in priority order (ascending).
- *                    Wraps calls in try/catch so failures don't block job completion.
+ * FLOW (all interactions through core contract → hook callbacks)
+ * ----
+ *  1. createJob(provider, evaluator, expiredAt, description, hook=this)
+ *  2. Any ACP lifecycle call (fund, submit, complete, reject, …)
+ *     → beforeAction: iterate enabled plugins in ascending priority order;
+ *       call plugin.hook.beforeAction(jobId, selector, data) for each.
+ *       If any plugin reverts, the entire beforeAction reverts, blocking
+ *       the state transition.
+ *     → afterAction: same iteration order; each call wrapped in try/catch
+ *       so a failing afterAction plugin emits PluginAfterActionFailed but
+ *       does NOT block the job state transition.
+ *  3. Owner adds/removes/enables/disables plugins via addPlugin,
+ *     removePlugin, enablePlugin, disablePlugin, setPluginPriority.
  *
- * Features:
- *   - Max 10 plugins for gas safety
- *   - No duplicate plugin addresses
- *   - Admin can add, remove, enable, disable plugins
- *   - Plugins sorted by priority (ascending — lower number = earlier execution)
- *   - NOT upgradeable — deploy a new instance and swap via addPlugin/removePlugin
+ * TRUST MODEL
+ * -----------
+ * Only AgenticCommerce can invoke beforeAction/afterAction on this router.
+ * Only the owner can modify the plugin list. beforeAction failures are
+ * surfaced to the caller as reverts (hard safety). afterAction failures
+ * are swallowed and logged (soft observability). Maximum 10 plugins cap
+ * gas consumption at a predictable upper bound.
  *
  * @custom:security-contact security@maiat.io
  */
