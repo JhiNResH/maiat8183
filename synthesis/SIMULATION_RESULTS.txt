@@ -1,0 +1,133 @@
+═══════════════════════════════════════════════════════════════
+  MAIAT8183 × SYNTHESIS HACKATHON — TRUST SIMULATION
+═══════════════════════════════════════════════════════════════
+  Projects (clients):     569
+  Judge agents (providers): 10 (7 good, 3 bad)
+  Rounds:                 5
+  TrustGate threshold:    50
+  Escrow threshold:       30
+  Auto-approve threshold: 70
+  Min quorum (low trust): 3 judges per project
+═══════════════════════════════════════════════════════════════
+
+
+┌─── ROUND 1 ────────────────────────────────────────────────────
+│  Projects evaluated:  113
+│  Escrow required:     116 (FundTransferHook)
+│  Auto-approved:       205 (TrustBasedEvaluator)
+│  Multi-judge review:  134 (quorum consensus)
+│  EAS attestations:    339 total
+│  ❌ BLOCKED:          judge-8, judge-9, judge-10
+│
+│  Judge Status:
+│    judge-1 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-2 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-3 [██████████████████░░]  92/100  good  ✅ AUTO-APPROVED
+│    judge-4 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-5 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-6 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-7 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-8 [█░░░░░░░░░░░░░░░░░░░]   8/100  bad   ❌ BLOCKED
+│    judge-9 [░░░░░░░░░░░░░░░░░░░░]   0/100  bad   ❌ BLOCKED
+│    judge-10 [███░░░░░░░░░░░░░░░░░]  16/100  bad   ❌ BLOCKED
+└────────────────────────────────────────────────────────────
+
+┌─── ROUND 2 ────────────────────────────────────────────────────
+│  Projects evaluated:  113
+│  Escrow required:     0 (FundTransferHook)
+│  Auto-approved:       339 (TrustBasedEvaluator)
+│  Multi-judge review:  0 (quorum consensus)
+│  EAS attestations:    678 total
+│
+│  Judge Status:
+│    judge-1 [██████████████████░░]  92/100  good  ✅ AUTO-APPROVED
+│    judge-2 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-3 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-4 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-5 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-6 [████████████████░░░░]  84/100  good  ✅ AUTO-APPROVED
+│    judge-7 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-8 [█░░░░░░░░░░░░░░░░░░░]   8/100  bad   ❌ BLOCKED
+│    judge-9 [░░░░░░░░░░░░░░░░░░░░]   0/100  bad   ❌ BLOCKED
+│    judge-10 [███░░░░░░░░░░░░░░░░░]  16/100  bad   ❌ BLOCKED
+└────────────────────────────────────────────────────────────
+
+┌─── ROUND 3 ────────────────────────────────────────────────────
+│  Projects evaluated:  113
+│  Escrow required:     0 (FundTransferHook)
+│  Auto-approved:       339 (TrustBasedEvaluator)
+│  Multi-judge review:  0 (quorum consensus)
+│  EAS attestations:    1017 total
+│
+│  Judge Status:
+│    judge-1 [██████████████████░░]  92/100  good  ✅ AUTO-APPROVED
+│    judge-2 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-3 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-4 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-5 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-6 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-7 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-8 [█░░░░░░░░░░░░░░░░░░░]   8/100  bad   ❌ BLOCKED
+│    judge-9 [░░░░░░░░░░░░░░░░░░░░]   0/100  bad   ❌ BLOCKED
+│    judge-10 [███░░░░░░░░░░░░░░░░░]  16/100  bad   ❌ BLOCKED
+└────────────────────────────────────────────────────────────
+
+┌─── ROUND 4 ────────────────────────────────────────────────────
+│  Projects evaluated:  113
+│  Escrow required:     0 (FundTransferHook)
+│  Auto-approved:       338 (TrustBasedEvaluator)
+│  Multi-judge review:  1 (quorum consensus)
+│  EAS attestations:    1356 total
+│
+│  Judge Status:
+│    judge-1 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-2 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-3 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-4 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-5 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-6 [██████████████████░░]  92/100  good  ✅ AUTO-APPROVED
+│    judge-7 [██████████████████░░]  92/100  good  ✅ AUTO-APPROVED
+│    judge-8 [█░░░░░░░░░░░░░░░░░░░]   8/100  bad   ❌ BLOCKED
+│    judge-9 [░░░░░░░░░░░░░░░░░░░░]   0/100  bad   ❌ BLOCKED
+│    judge-10 [███░░░░░░░░░░░░░░░░░]  16/100  bad   ❌ BLOCKED
+└────────────────────────────────────────────────────────────
+
+┌─── ROUND 5 ────────────────────────────────────────────────────
+│  Projects evaluated:  113
+│  Escrow required:     0 (FundTransferHook)
+│  Auto-approved:       339 (TrustBasedEvaluator)
+│  Multi-judge review:  0 (quorum consensus)
+│  EAS attestations:    1695 total
+│
+│  Judge Status:
+│    judge-1 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-2 [███████████████████░]  96/100  good  ✅ AUTO-APPROVED
+│    judge-3 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-4 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-5 [████████████████████] 100/100  good  ✅ AUTO-APPROVED
+│    judge-6 [██████████████████░░]  92/100  good  ✅ AUTO-APPROVED
+│    judge-7 [██████████████████░░]  92/100  good  ✅ AUTO-APPROVED
+│    judge-8 [█░░░░░░░░░░░░░░░░░░░]   8/100  bad   ❌ BLOCKED
+│    judge-9 [░░░░░░░░░░░░░░░░░░░░]   0/100  bad   ❌ BLOCKED
+│    judge-10 [███░░░░░░░░░░░░░░░░░]  16/100  bad   ❌ BLOCKED
+└────────────────────────────────────────────────────────────
+
+═══════════════════════════════════════════════════════════════
+  FINAL RESULTS
+═══════════════════════════════════════════════════════════════
+  Total EAS attestations minted:  1695
+  Total escrow transactions:      116
+  Total multi-judge escalations:  135
+  Bad judges blocked:             3
+
+  Good judges avg trust score: 97/100
+  Bad judges avg trust score:  8/100
+  Good judges auto-approved:   7/7
+  Bad judges blocked:          3/3
+
+  Conclusion:
+  → Good judges earned auto-approval through consistent accuracy
+  → Bad judges were naturally gated out by low trust scores
+  → Every judgment has an immutable EAS attestation
+  → Cold start solved: escrow + quorum protected projects from day 1
+═══════════════════════════════════════════════════════════════
