@@ -1,91 +1,92 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { runPipeline } from '../lib/simulation.js';
-import { PRESETS, VALUE_TIERS, TOKENS } from '../lib/utils.js';
-import HookCard from './HookCard.jsx';
+import { simulateJobLifecycle } from '../lib/simulation.js';
+import { SCENARIOS, shortenAddress } from '../lib/utils.js';
+import LifecycleStep from './LifecycleStep.jsx';
 import ParameterPanel from './ParameterPanel.jsx';
 
 const VERDICT_CONFIG = {
-  approved: { label: 'Approved', dot: '#10b981', desc: 'All hooks passed — job proceeds with full trust.' },
-  rejected: { label: 'Rejected', dot: '#ef4444', desc: 'One or more hooks blocked — job cannot proceed.' },
-  escalated: { label: 'Escalated', dot: '#f59e0b', desc: 'Requires additional review via quorum consensus.' },
+  approved: { label: 'Completed', dot: '#10b981', desc: 'Job completed. Payment released. EAS attestation minted. Reputation updated.' },
+  rejected: { label: 'Rejected', dot: '#ef4444', desc: 'Hook reverted. Job blocked or rejected by evaluator. Client refunded.' },
+  escalated: { label: 'Escalated', dot: '#f59e0b', desc: 'Provider needs quorum consensus. Job awaiting multi-judge review.' },
 };
 
 export default function PipelineSimulator({ params, onParamsChange, compare }) {
-  const [address, setAddress] = useState(PRESETS[0].address);
-  const [overrideScore, setOverrideScore] = useState(PRESETS[0].score);
-  const [valueTier, setValueTier] = useState('Medium');
-  const [paymentToken, setPaymentToken] = useState('ETH');
+  const [scenarioIdx, setScenarioIdx] = useState(0);
   const [animKey, setAnimKey] = useState(0);
 
+  const scenario = SCENARIOS[scenarioIdx];
   const result = useMemo(
-    () => runPipeline({ address, overrideScore, valueTier, paymentToken, params }),
-    [address, overrideScore, valueTier, paymentToken, params]
+    () => simulateJobLifecycle({
+      client: scenario.client,
+      provider: scenario.provider,
+      evaluator: scenario.evaluator,
+      budget: scenario.budget,
+      paymentToken: scenario.token,
+      params,
+    }),
+    [scenario, params]
   );
 
-  useEffect(() => { setAnimKey((k) => k + 1); }, [address, overrideScore, valueTier, paymentToken, params]);
-
+  useEffect(() => { setAnimKey((k) => k + 1); }, [scenarioIdx, params]);
   const vc = VERDICT_CONFIG[result.verdict];
 
   return (
-    <div className={`flex flex-col lg:flex-row gap-6`}>
+    <div className="flex flex-col lg:flex-row gap-6">
       <div className="flex-1 min-w-0">
-        {/* Input — search bar style like app.maiat.io verify page */}
-        <div className="rounded-2xl p-1 mb-8" style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', boxShadow: 'var(--glass-shadow)' }}>
-          <div className="flex items-center gap-3 px-4 py-3">
-            <span className="text-lg" style={{ color: 'var(--text-muted)' }}>🔍</span>
-            <input
-              type="text"
-              value={address}
-              onChange={(e) => { setAddress(e.target.value); setOverrideScore(null); }}
-              placeholder="0x... or agent name"
-              className="flex-1 bg-transparent outline-none text-sm"
-              style={{ color: 'var(--text-color)' }}
-            />
-            <div className="flex gap-2">
-              <select
-                value={valueTier}
-                onChange={(e) => setValueTier(e.target.value)}
-                className="text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 rounded-full outline-none cursor-pointer"
-                style={{ background: 'var(--badge-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)' }}
-              >
-                {VALUE_TIERS.map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
-              <select
-                value={paymentToken}
-                onChange={(e) => setPaymentToken(e.target.value)}
-                className="text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 rounded-full outline-none cursor-pointer"
-                style={{ background: 'var(--badge-bg)', color: 'var(--text-color)', border: '1px solid var(--border-color)' }}
-              >
-                {TOKENS.map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
-            </div>
+        {/* Scenario selector */}
+        <div className="rounded-xl p-5 mb-6" style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)' }}>
+          <div className="text-[9px] font-bold uppercase tracking-[0.2em] mb-3" style={{ color: 'var(--text-muted)' }}>
+            ERC-8183 Job Scenario
           </div>
-
-          {/* Preset buttons */}
-          <div className="flex gap-2 px-4 pb-3">
-            {PRESETS.map((p) => (
+          <div className="flex flex-wrap gap-2 mb-4">
+            {SCENARIOS.map((s, i) => (
               <button
-                key={p.label}
-                onClick={() => { setAddress(p.address); setOverrideScore(p.score); }}
-                className="text-[10px] font-medium px-3 py-1 rounded-full transition-all"
+                key={s.label}
+                onClick={() => setScenarioIdx(i)}
+                className="text-[10px] font-medium px-3 py-1.5 rounded-full transition-all"
                 style={{
-                  color: address === p.address ? 'var(--text-color)' : 'var(--text-muted)',
-                  background: address === p.address ? 'var(--badge-bg)' : 'transparent',
-                  border: `1px solid ${address === p.address ? 'var(--border-color)' : 'transparent'}`,
+                  color: i === scenarioIdx ? 'var(--text-color)' : 'var(--text-muted)',
+                  background: i === scenarioIdx ? 'var(--badge-bg)' : 'transparent',
+                  border: `1px solid ${i === scenarioIdx ? 'var(--border-color)' : 'transparent'}`,
                 }}
               >
-                {p.label} · {p.score}
+                {s.label}
               </button>
             ))}
           </div>
+          <p className="text-[11px] mb-3" style={{ color: 'var(--text-secondary)' }}>{scenario.desc}</p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-[10px]">
+            <div>
+              <div className="font-bold uppercase tracking-wider mb-0.5" style={{ color: 'var(--text-muted)' }}>Client</div>
+              <div className="font-mono" style={{ color: 'var(--text-color)' }}>{shortenAddress(scenario.client)}</div>
+            </div>
+            <div>
+              <div className="font-bold uppercase tracking-wider mb-0.5" style={{ color: 'var(--text-muted)' }}>Provider</div>
+              <div className="font-mono" style={{ color: 'var(--text-color)' }}>{shortenAddress(scenario.provider)}</div>
+            </div>
+            <div>
+              <div className="font-bold uppercase tracking-wider mb-0.5" style={{ color: 'var(--text-muted)' }}>Budget</div>
+              <div className="font-mono" style={{ color: 'var(--text-color)' }}>${scenario.budget.toLocaleString()} {scenario.token}</div>
+            </div>
+            <div>
+              <div className="font-bold uppercase tracking-wider mb-0.5" style={{ color: 'var(--text-muted)' }}>Hook</div>
+              <div className="font-mono" style={{ color: 'var(--text-color)' }}>MaiatRouter</div>
+            </div>
+          </div>
         </div>
 
-        {/* Pipeline Flow */}
+        {/* Job Lifecycle */}
+        <div className="mb-3">
+          <div className="text-[9px] font-bold uppercase tracking-[0.2em] mb-3" style={{ color: 'var(--text-muted)' }}>
+            AgenticCommerceHooked — Job Lifecycle
+          </div>
+        </div>
+
         <div key={animKey}>
-          {result.steps.map((step, i) => (
-            <div key={step.name}>
-              <HookCard step={step} index={i} animate={true} />
-              {i < result.steps.length - 1 && <div className="pipeline-connector" />}
+          {result.lifecycle.map((step, i) => (
+            <div key={step.step + i}>
+              <LifecycleStep step={step} index={i} animate={true} />
+              {i < result.lifecycle.length - 1 && <div className="pipeline-connector" />}
             </div>
           ))}
         </div>
@@ -95,7 +96,7 @@ export default function PipelineSimulator({ params, onParamsChange, compare }) {
         <div
           className="rounded-xl p-8 text-center hook-animate"
           style={{
-            animationDelay: `${result.steps.length * 350}ms`,
+            animationDelay: `${result.lifecycle.length * 300}ms`,
             background: 'var(--card-bg)',
             border: `1px solid ${vc.dot}25`,
             boxShadow: `0 0 40px ${vc.dot}08`,
@@ -106,13 +107,6 @@ export default function PipelineSimulator({ params, onParamsChange, compare }) {
             <span className="atmosphere-text text-3xl sm:text-4xl">{vc.label}.</span>
           </div>
           <p className="text-xs mt-2" style={{ color: 'var(--text-secondary)' }}>{vc.desc}</p>
-          <div className="flex items-center justify-center gap-4 mt-4 text-[10px] font-mono" style={{ color: 'var(--text-muted)' }}>
-            <span>Score {result.trustScore}/100</span>
-            <span>·</span>
-            <span>{valueTier} tier</span>
-            <span>·</span>
-            <span>{paymentToken}</span>
-          </div>
         </div>
       </div>
 
@@ -121,6 +115,23 @@ export default function PipelineSimulator({ params, onParamsChange, compare }) {
         <div className="w-full lg:w-64 shrink-0">
           <div className="lg:sticky lg:top-24">
             <ParameterPanel params={params} onChange={onParamsChange} />
+
+            {/* Hook architecture note */}
+            <div className="rounded-xl p-4 mt-4" style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)' }}>
+              <div className="text-[9px] font-bold uppercase tracking-[0.2em] mb-2" style={{ color: 'var(--text-muted)' }}>
+                Architecture
+              </div>
+              <div className="text-[10px] space-y-1.5 font-mono" style={{ color: 'var(--text-secondary)' }}>
+                <p>MaiatRouterHook</p>
+                <p className="pl-3">├ TrustGateACPHook</p>
+                <p className="pl-3">├ TokenSafetyHook</p>
+                <p className="pl-3">├ FundTransferHook</p>
+                <p className="pl-3">├ AttestationHook</p>
+                <p className="pl-3">└ MutualAttestationHook</p>
+                <p className="mt-2">TrustBasedEvaluator</p>
+                <p>EvaluatorRegistry</p>
+              </div>
+            </div>
           </div>
         </div>
       )}
