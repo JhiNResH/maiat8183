@@ -16,7 +16,7 @@ contract MockOracle is ITrustOracle {
     mapping(address => UserReputation) public reps;
 
     function setRep(address user, uint256 score, bool initialized) external {
-        reps[user] = UserReputation(score, 0, initialized, block.timestamp);
+        reps[user] = UserReputation(score, 0, 0, 0, initialized, block.timestamp);
     }
 
     function getUserData(address user) external view override returns (UserReputation memory) {
