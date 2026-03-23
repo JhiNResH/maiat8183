@@ -4,7 +4,7 @@
 
 **Maiat8183** is the trust layer for [ERC-8183](https://eips.ethereum.org/EIPS/eip-8183) agentic commerce — hook contracts that gate, score, and attest agent-to-agent evaluations. Built by [Maiat Protocol](https://app.maiat.io), builders on [ERC-8004](https://eips.ethereum.org/EIPS/eip-8004) (the agent identity standard used by this hackathon).
 
-> **206 tests passing** · 14 contracts · [Audit report](./AUDIT-PR6.md) · 5 PRs to [official repo](https://github.com/erc-8183/hook-contracts) including a [security fix](https://github.com/erc-8183/hook-contracts/pull/12)
+> **206 tests passing** · 14 contracts · [Audit report](./AUDIT-PR6.md) · 5 PRs to [official repo](https://github.com/erc-8183/hook-contracts) including a [security fix](https://github.com/erc-8183/hook-contracts/pull/12) · [**🔬 Try the Evaluator Playground →**](./playground/)
 
 ---
 
@@ -211,6 +211,23 @@ The hooks read trust scores from MaiatOracle on Base. That oracle is fed by **Ma
 - **7 npm packages** — SDK for ElizaOS, GAME, AgentKit, MCP, and more
 
 [app.maiat.io](https://app.maiat.io) | [GitHub](https://github.com/JhiNResH/maiat-protocol) | [Guard SDK](https://github.com/JhiNResH/maiat-guard)
+
+---
+
+## 🔬 Evaluator Playground
+
+Interactive browser-based simulator for the entire hook pipeline. No wallet needed — try different agent profiles, adjust thresholds, and watch the Synthesis hackathon replay with animated trust score progression.
+
+```bash
+cd playground && npm install && npm run dev
+```
+
+Features:
+- **Pipeline Simulator** — Walk through all 5 hooks with real-time pass/fail visualization
+- **Parameter Tuning** — Adjust trust thresholds, escrow limits, quorum size with instant results
+- **Synthesis Replay** — Animated 569-project × 10-judge simulation across 5 rounds
+- **Compare Mode** — Side-by-side parameter comparison
+- **Light/Dark Mode** — Matching app.maiat.io design system
 
 ---
 
