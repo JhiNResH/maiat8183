@@ -41,27 +41,34 @@ That's Maiat8183.
 
 These judges have **zero track record**. No past hackathons judged. No on-chain reputation. No attestations. Yet they're deciding the outcome for hundreds of teams.
 
-Every agent platform faces this on day one. Maiat8183 solves it:
+Every agent platform faces this on day one. Maiat8183 solves it with the full ERC-8183 lifecycle:
 
 ```
-Project submits for judging → createJob("evaluate my project")
+Step 1: Project submits → createJob("evaluate my project") + fund()
+  → MaiatACPHook.beforeAction(fund): checks project trust score via TrustScoreOracle
+  → TokenSafetyHook: verifies payment token isn't a honeypot/high-tax
+  → Low-trust or unsafe → reverted, never enters escrow
 
-Judge A applies → beforeJobTaken()
-  → TrustGateACPHook: score 0, no history
-  → FundTransferHook: escrow the reward (payment held until verified)
-  → TrustBasedEvaluator: requires minimum judge quorum (no single judge decides)
+Step 2: Judge reviews & submits → submit(jobId, verdict, evidence)
+  → MaiatACPHook.beforeAction(submit): checks judge trust score
+  → Score too low → reverted, judge can't submit
+  → Judge A is new (score 0) but allowUninitialized=true → passes
 
-Judge A submits verdict → completeJob()
+Step 3: Evaluator verifies judge → MaiatEvaluator.evaluate(acpContract, jobId)
+  → Reads judge's trust score from oracle
+  → Score >= threshold AND not flagged → complete(jobId)
+  → Score too low → reject(jobId, REASON_LOW_TRUST)
+  → Flagged agent → reject(jobId, REASON_FLAGGED)
+
+Step 4: Outcome recorded
+  → MaiatACPHook.afterAction(complete/reject): emits JobOutcomeRecorded
   → AttestationHook: EAS receipt minted (immutable, on-chain, verifiable)
   → MutualAttestationHook: both judge AND project rate each other (Airbnb-style)
-  → Judge A now has 1 attestation — reputation begins
-
-Judge B submits conflicting verdict
-  → TrustBasedEvaluator: disagreement detected → escalate to human review
+  → Off-chain indexer (Wadjet) picks up event → feeds ML model
 
 After hackathon ends:
-  → Judges whose scores aligned with final results → trust scores increase
-  → Judges who were outliers → trust scores stay low
+  → Judges with consistent, aligned scores → trust scores increase
+  → Outlier/biased judges → trust scores stay low
   → Next hackathon: good judges pre-approved, bad judges gated out
 ```
 
@@ -77,31 +84,50 @@ We indexed all 569 Synthesis projects from their ERC-8004 identities and simulat
 
 ---
 
-## How It Works
+## How It Works: ERC-8183 Job Lifecycle
 
 ```
-MaiatRouterHook (one hook address per job — chains everything below)
-  |
-  |-- TrustGateACPHook       — Pre-screens participants by trust score
-  |     \-- Query ITrustOracle -> allow/block based on score vs threshold
-  |
-  |-- TokenSafetyHook        — Blocks unsafe payment tokens before escrow
-  |     \-- Query ITokenSafetyOracle -> honeypot/high-tax/unverified check
-  |
-  |-- FundTransferHook       — Two-phase escrow for token conversion jobs
-  |     \-- Client funds held -> provider deposits output -> buyer receives
-  |
-  |-- AttestationHook        — Records every outcome as an EAS attestation
-  |     \-- Permanent on-chain receipt: jobId, client, provider, verdict
-  |
-  \-- MutualAttestationHook  — Airbnb-style bilateral reviews
-        \-- Both client AND provider rate each other (1-5 stars + EAS)
-
-EvaluatorRegistry            — Trust-ranked evaluator discovery
-  \-- Multiple evaluators per domain, sorted by performance, auto-delist
-
-TrustBasedEvaluator          — Auto-approve/reject based on trust score
-  \-- Feeds outcomes back to registry -> reputation loop
+┌─────────────────────────────────────────────────────────────────────┐
+│                    ERC-8183 AgenticCommerce                          │
+│                                                                     │
+│  createJob() ──► fund() ──► submit() ──► complete()/reject()        │
+│       │            │           │              │                      │
+│       ▼            ▼           ▼              ▼                      │
+│  [no hook]   beforeAction  beforeAction  afterAction                 │
+│              (FUND)        (SUBMIT)      (COMPLETE/REJECT)           │
+└─────────────────────────────────────────────────────────────────────┘
+                     │           │              │
+                     ▼           ▼              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  MaiatRouterHook (chains up to 10 plugins per job)                  │
+│                                                                     │
+│  beforeAction(fund):                                                │
+│    ├── TrustGateACPHook    — Check client trust score               │
+│    │     └── ITrustOracle → score < threshold? REVERT               │
+│    └── TokenSafetyHook     — Block unsafe payment tokens            │
+│          └── ITokenSafetyOracle → honeypot/high-tax? REVERT         │
+│                                                                     │
+│  beforeAction(submit):                                              │
+│    └── TrustGateACPHook    — Check provider (judge) trust score     │
+│          └── ITrustOracle → score < threshold? REVERT               │
+│                                                                     │
+│  afterAction(complete/reject):                                      │
+│    ├── AttestationHook         — EAS receipt (permanent on-chain)    │
+│    └── MutualAttestationHook   — Bilateral reviews (Airbnb-style)   │
+└─────────────────────────────────────────────────────────────────────┘
+                              +
+┌─────────────────────────────────────────────────────────────────────┐
+│  MaiatEvaluator (set as job.evaluator)                              │
+│    └── evaluate(acpContract, jobId)                                 │
+│         ├── Read provider score from oracle                         │
+│         ├── score >= threshold → complete()                         │
+│         ├── score < threshold → reject(REASON_LOW_TRUST)            │
+│         ├── flagged agent → reject(REASON_FLAGGED)                  │
+│         └── uninitialized → reject(REASON_UNINITIALIZED)            │
+│                                                                     │
+│  EvaluatorRegistry — Trust-ranked evaluator discovery               │
+│    └── Multiple evaluators per domain, auto-delist underperformers  │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -216,9 +242,12 @@ The hooks read trust scores from MaiatOracle on Base. That oracle is fed by **Ma
 
 ## 🔬 Evaluator Playground
 
-Interactive browser-based simulator for the entire hook pipeline. No wallet needed — try different agent profiles, adjust thresholds, and watch the Synthesis hackathon replay with animated trust score progression.
+> [**Try it live →**](https://app.maiat.io/demo)
+
+Interactive browser-based simulator for the entire ERC-8183 hook lifecycle. No wallet needed — walk through every step from `createJob()` to EAS attestation with real code snippets from the contracts.
 
 ```bash
+# Or run locally
 cd playground && npm install && npm run dev
 ```
 
