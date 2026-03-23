@@ -74,6 +74,7 @@ contract FundTransferHook is BaseACPHook {
     error AlreadyDeposited();
     error NothingToRecover();
     error JobNotExpired();
+    error OnlyProvider();
 
     constructor(address token_, address acpContract_) BaseACPHook(acpContract_) {
         if (token_ == address(0)) revert ZeroAddress();
@@ -150,10 +151,12 @@ contract FundTransferHook is BaseACPHook {
 
     /// @dev Provider can recover deposited tokens after the job expires.
     ///      claimRefund is deliberately not hookable, so this is a direct call.
+    ///      [HIGH-2 FIX] Only the provider can call this to prevent unauthorized triggers.
     function recoverTokens(uint256 jobId) external {
         TransferCommitment memory c = commitments[jobId];
         if (!c.providerDeposited) revert NothingToRecover();
         (address provider, uint8 status) = _getJobProviderAndStatus(jobId);
+        if (msg.sender != provider) revert OnlyProvider();
         // Status 5 = Expired (set by claimRefund)
         if (status != 5) revert JobNotExpired();
         delete commitments[jobId];
