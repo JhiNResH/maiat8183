@@ -29,7 +29,7 @@ import {ITrustOracle} from "../interfaces/ITrustOracle.sol";
  *     caller:
  *       a. Fetch job from AgenticCommerce; verify status == Submitted and
  *          evaluator == address(this).
- *       b. Query oracle.getUserData(provider) for reputationScore.
+ *       b. Query oracle.getTrustScore(provider).
  *       c. If score >= minTrustScore → agenticCommerce.complete(jobId, ...)
  *          else → agenticCommerce.reject(jobId, ...)
  *       d. Call registry.recordOutcome(address(this), approved) to update
