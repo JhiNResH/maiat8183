@@ -23,7 +23,7 @@ import {ITokenSafetyOracle} from "../interfaces/ITokenSafetyOracle.sol";
  * FLOW (all interactions through core contract → hook callbacks)
  * ----
  *  1. createJob(provider, evaluator, expiredAt, description, hook=this
- *     or hook=MaiatRouterHook with TokenSafetyHook as a plugin)
+ *     or hook=CompositeRouterHook with TokenSafetyHook as a plugin)
  *  2. fund(jobId, optParams)
  *     → _preFund (via beforeAction): decode data to extract payment token
  *       address. If whitelisted, pass through. Otherwise query
@@ -40,7 +40,7 @@ import {ITokenSafetyOracle} from "../interfaces/ITokenSafetyOracle.sol";
  * bitmask is also owner-configurable, letting operators tune risk
  * tolerance (e.g. allow Unverified tokens in low-trust environments).
  *
- * @custom:security-contact security@maiat.io
+ * @custom:security-contact security@erc-8183.org
  */
 contract TokenSafetyHook is IACPHook, OwnableUpgradeable {
     /*//////////////////////////////////////////////////////////////

@@ -5,7 +5,7 @@ import {IACPHook} from "../IACPHook.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
 /**
- * @title MaiatRouterHook
+ * @title CompositeRouterHook
  * @notice Composite hook router that chains up to 10 plugin hooks in
  *         priority order, enabling flexible composition of hook behaviors
  *         for ERC-8183 jobs without deploying a new hook address.
@@ -15,7 +15,7 @@ import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Own
  * A single ACP job often needs multiple orthogonal safety checks — e.g.
  * token safety screening before funding, trust-score gating before
  * submission, and attestation writing after completion. Wiring each job
- * to a different hook address is cumbersome. MaiatRouterHook acts as a
+ * to a different hook address is cumbersome. CompositeRouterHook acts as a
  * single hook address that fan-outs to an ordered list of plugin hooks,
  * letting operators compose behavior by adding/removing/prioritising
  * plugins at runtime without changing the job's hook reference.
@@ -42,9 +42,9 @@ import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Own
  * are swallowed and logged (soft observability). Maximum 10 plugins cap
  * gas consumption at a predictable upper bound.
  *
- * @custom:security-contact security@maiat.io
+ * @custom:security-contact security@erc-8183.org
  */
-contract MaiatRouterHook is IACPHook, OwnableUpgradeable {
+contract CompositeRouterHook is IACPHook, OwnableUpgradeable {
     /*//////////////////////////////////////////////////////////////
                             TYPES
     //////////////////////////////////////////////////////////////*/
@@ -96,11 +96,11 @@ contract MaiatRouterHook is IACPHook, OwnableUpgradeable {
                             ERRORS
     //////////////////////////////////////////////////////////////*/
 
-    error MaiatRouterHook__ZeroAddress();
-    error MaiatRouterHook__OnlyAgenticCommerce();
-    error MaiatRouterHook__MaxPluginsReached();
-    error MaiatRouterHook__PluginAlreadyRegistered(address hook);
-    error MaiatRouterHook__PluginNotFound(address hook);
+    error CompositeRouterHook__ZeroAddress();
+    error CompositeRouterHook__OnlyAgenticCommerce();
+    error CompositeRouterHook__MaxPluginsReached();
+    error CompositeRouterHook__PluginAlreadyRegistered(address hook);
+    error CompositeRouterHook__PluginNotFound(address hook);
 
     /*//////////////////////////////////////////////////////////////
                             CONSTRUCTOR
@@ -116,7 +116,7 @@ contract MaiatRouterHook is IACPHook, OwnableUpgradeable {
     //////////////////////////////////////////////////////////////*/
 
     /**
-     * @notice Initialize the MaiatRouterHook
+     * @notice Initialize the CompositeRouterHook
      * @param agenticCommerce_ AgenticCommerce contract address
      * @param owner_ Contract owner address
      */
@@ -124,7 +124,7 @@ contract MaiatRouterHook is IACPHook, OwnableUpgradeable {
         address agenticCommerce_,
         address owner_
     ) external initializer {
-        if (agenticCommerce_ == address(0)) revert MaiatRouterHook__ZeroAddress();
+        if (agenticCommerce_ == address(0)) revert CompositeRouterHook__ZeroAddress();
 
         __Ownable_init(owner_);
         s_agenticCommerce = agenticCommerce_;
@@ -142,7 +142,7 @@ contract MaiatRouterHook is IACPHook, OwnableUpgradeable {
      * @param data Encoded function parameters
      */
     function beforeAction(uint256 jobId, bytes4 selector, bytes calldata data) external override {
-        if (msg.sender != s_agenticCommerce) revert MaiatRouterHook__OnlyAgenticCommerce();
+        if (msg.sender != s_agenticCommerce) revert CompositeRouterHook__OnlyAgenticCommerce();
 
         uint256 len = s_plugins.length;
         if (len == 0) return;
@@ -172,7 +172,7 @@ contract MaiatRouterHook is IACPHook, OwnableUpgradeable {
      * @param data Encoded function parameters
      */
     function afterAction(uint256 jobId, bytes4 selector, bytes calldata data) external override {
-        if (msg.sender != s_agenticCommerce) revert MaiatRouterHook__OnlyAgenticCommerce();
+        if (msg.sender != s_agenticCommerce) revert CompositeRouterHook__OnlyAgenticCommerce();
 
         uint256 len = s_plugins.length;
         if (len == 0) return;
@@ -218,9 +218,9 @@ contract MaiatRouterHook is IACPHook, OwnableUpgradeable {
      * @param priority Execution priority (lower = earlier)
      */
     function addPlugin(address hook, uint256 priority) external onlyOwner {
-        if (hook == address(0)) revert MaiatRouterHook__ZeroAddress();
-        if (s_registered[hook]) revert MaiatRouterHook__PluginAlreadyRegistered(hook);
-        if (s_plugins.length >= MAX_PLUGINS) revert MaiatRouterHook__MaxPluginsReached();
+        if (hook == address(0)) revert CompositeRouterHook__ZeroAddress();
+        if (s_registered[hook]) revert CompositeRouterHook__PluginAlreadyRegistered(hook);
+        if (s_plugins.length >= MAX_PLUGINS) revert CompositeRouterHook__MaxPluginsReached();
 
         s_plugins.push(Plugin({
             hook: IACPHook(hook),
@@ -237,7 +237,7 @@ contract MaiatRouterHook is IACPHook, OwnableUpgradeable {
      * @param hook The hook contract address to remove
      */
     function removePlugin(address hook) external onlyOwner {
-        if (!s_registered[hook]) revert MaiatRouterHook__PluginNotFound(hook);
+        if (!s_registered[hook]) revert CompositeRouterHook__PluginNotFound(hook);
 
         uint256 len = s_plugins.length;
         for (uint256 i = 0; i < len; i++) {
@@ -255,7 +255,7 @@ contract MaiatRouterHook is IACPHook, OwnableUpgradeable {
         }
 
         // Should not reach here due to s_registered check
-        revert MaiatRouterHook__PluginNotFound(hook);
+        revert CompositeRouterHook__PluginNotFound(hook);
     }
 
     /**
@@ -263,7 +263,7 @@ contract MaiatRouterHook is IACPHook, OwnableUpgradeable {
      * @param hook The hook contract address to enable
      */
     function enablePlugin(address hook) external onlyOwner {
-        if (!s_registered[hook]) revert MaiatRouterHook__PluginNotFound(hook);
+        if (!s_registered[hook]) revert CompositeRouterHook__PluginNotFound(hook);
 
         uint256 len = s_plugins.length;
         for (uint256 i = 0; i < len; i++) {
@@ -280,7 +280,7 @@ contract MaiatRouterHook is IACPHook, OwnableUpgradeable {
      * @param hook The hook contract address to disable
      */
     function disablePlugin(address hook) external onlyOwner {
-        if (!s_registered[hook]) revert MaiatRouterHook__PluginNotFound(hook);
+        if (!s_registered[hook]) revert CompositeRouterHook__PluginNotFound(hook);
 
         uint256 len = s_plugins.length;
         for (uint256 i = 0; i < len; i++) {
@@ -298,7 +298,7 @@ contract MaiatRouterHook is IACPHook, OwnableUpgradeable {
      * @param newPriority The new priority value
      */
     function setPluginPriority(address hook, uint256 newPriority) external onlyOwner {
-        if (!s_registered[hook]) revert MaiatRouterHook__PluginNotFound(hook);
+        if (!s_registered[hook]) revert CompositeRouterHook__PluginNotFound(hook);
 
         uint256 len = s_plugins.length;
         for (uint256 i = 0; i < len; i++) {
@@ -316,7 +316,7 @@ contract MaiatRouterHook is IACPHook, OwnableUpgradeable {
      * @param agenticCommerce_ New AgenticCommerce address
      */
     function setAgenticCommerce(address agenticCommerce_) external onlyOwner {
-        if (agenticCommerce_ == address(0)) revert MaiatRouterHook__ZeroAddress();
+        if (agenticCommerce_ == address(0)) revert CompositeRouterHook__ZeroAddress();
         address old = s_agenticCommerce;
         s_agenticCommerce = agenticCommerce_;
         emit AgenticCommerceUpdated(old, agenticCommerce_);
@@ -358,7 +358,7 @@ contract MaiatRouterHook is IACPHook, OwnableUpgradeable {
      * @return priority The plugin's priority
      */
     function getPluginInfo(address hook) external view returns (bool enabled, uint256 priority) {
-        if (!s_registered[hook]) revert MaiatRouterHook__PluginNotFound(hook);
+        if (!s_registered[hook]) revert CompositeRouterHook__PluginNotFound(hook);
 
         uint256 len = s_plugins.length;
         for (uint256 i = 0; i < len; i++) {
@@ -368,7 +368,7 @@ contract MaiatRouterHook is IACPHook, OwnableUpgradeable {
         }
 
         // Should not reach here
-        revert MaiatRouterHook__PluginNotFound(hook);
+        revert CompositeRouterHook__PluginNotFound(hook);
     }
 
     /*//////////////////////////////////////////////////////////////
