@@ -38,7 +38,7 @@ import "../BaseACPHook.sol";
  * and schema UID are owner-updatable in case of re-registration, but the
  * already-written attestations on EAS are immutable.
  *
- * @custom:security-contact security@maiat.io
+ * @custom:security-contact security@erc-8183.org
  */
 
 /// @notice Minimal EAS interface (Base: 0x4200000000000000000000000000000000000021)
