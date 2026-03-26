@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
+
 /**
  * @title IACPHook
  * @dev Interface for ERC 8183 hook contracts. Implementations receive before/after
  *      callbacks on core job functions.
  *
  *      The `selector` identifies which core function is being called (e.g.
- *      AgenticCommerceHooked.fund.selector). The `data` parameter contains
+ *      AgenticCommerce.fund.selector). The `data` parameter contains
  *      function-specific parameters encoded as bytes (see documentation for
  *      encoding per selector).
  *
@@ -19,7 +21,7 @@ pragma solidity ^0.8.20;
  *      virtual functions (e.g. _preFund, _postComplete) so you only override
  *      what you need.
  */
-interface IACPHook {
+interface IACPHook is IERC165 {
     /// @dev Called before the core function executes. MAY revert to block the action.
     /// @param jobId The job ID.
     /// @param selector The function selector of the core function being called.
